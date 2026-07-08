@@ -103,38 +103,58 @@ const {
     const sock = makeWASocket({
       version,
       auth: state,
-      printQRInTerminal: false,
+      printQRInTerminal: true,
       logger: P({ level: 'silent' }),
       generateHighQualityLinkPreview: true,
       syncFullHistory: false,
+      shouldIgnoreJid: jid => jid.endsWith('@broadcast'),
     });
 
     if (!state.creds.registered) {
       console.log(chalk.yellow(`⏳ Requesting pairing code for ${cfg.ownerNumber}...`));
       await new Promise(r => setTimeout(r, 3000));
-      let retries = 3;
+      let retries = 5;
       while (retries-- > 0) {
         try {
+          console.log(chalk.yellow(`\n🔄 Attempting to get pairing code (Attempt ${6 - retries}/5)...`));
           const code = await sock.requestPairingCode(cfg.ownerNumber);
+          
+          if (!code) {
+            throw new Error('No pairing code returned from WhatsApp');
+          }
+          
           console.log(chalk.green('\n╔══════════════════════════════╗'));
           console.log(chalk.green(`║  PAIRING CODE: ${code}  ║`));
           console.log(chalk.green('╚══════════════════════════════╝\n'));
-          console.log(chalk.cyan('👉 WhatsApp → Linked Devices → Link with phone number\n'));
+          console.log(chalk.cyan('📱 WhatsApp → Linked Devices → Link with phone number\n'));
+          console.log(chalk.yellow('⏳ Waiting for WhatsApp to confirm pairing...\n'));
           break;
         } catch (err) {
-          console.log(chalk.red(`❌ Pairing code failed: ${err.message}`));
+          console.log(chalk.red(`❌ Error: ${err.message}`));
+          console.log(chalk.yellow(`Stack: ${err.stack}`));
           if (retries > 0) {
-            console.log(chalk.yellow(`Retrying in 5s... (${retries} left)`));
+            console.log(chalk.yellow(`🔄 Retrying in 5s... (${retries} retries left)\n`));
             await new Promise(r => setTimeout(r, 5000));
           } else {
-            console.log(chalk.red('Could not get pairing code. Delete session/ folder and restart.'));
+            console.log(chalk.red('❌ FAILED: Could not get pairing code after 5 attempts.'));
+            console.log(chalk.red('📝 Solutions:'));
+            console.log(chalk.red('   1. Delete the "session" folder and restart'));
+            console.log(chalk.red('   2. Check your phone number format (should be: country code + number)'));
+            console.log(chalk.red('   3. Make sure your WhatsApp account is not logged in on another device'));
+            console.log(chalk.red('   4. Wait a few minutes and try again\n'));
+            process.exit(1);
           }
         }
       }
     }
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect } = update;
+      const { connection, lastDisconnect, qr } = update;
+      
+      if (qr) {
+        console.log(chalk.yellow('\n🔗 QR Code generated. Scan with WhatsApp:\n'));
+      }
+      
       if (connection === 'open') {
         console.log(chalk.green('✅ Connected to WhatsApp!'));
         console.log(chalk.cyan('🤖 Lesta Bot v2 — 70+ commands active! 🇰🇪\n'));
@@ -157,7 +177,10 @@ const {
       }
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+      console.log(chalk.green('✅ Credentials saved successfully!'));
+      await saveCreds();
+    });
 
     sock.ev.on('group-participants.update', async (update) => {
       try { await groupHandler.handleParticipants(sock, update); } catch {}
